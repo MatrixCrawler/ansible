@@ -198,7 +198,7 @@ class CallbackModule(CallbackBase):
         self.all_end_times[self.play] = {}
 
     def v2_playbook_on_stats(self, stats):
-        influxdb = self.connect_to_influxdb()
+        influxdb = self._connect_to_influxdb()
         data_points = []
         for play, play_results in self.all_end_times.items():
             for host, host_data_point in play_results.items():
@@ -236,23 +236,15 @@ class CallbackModule(CallbackBase):
 
     def v2_runner_on_async_failed(self, result):
         self._create_data_point(result._host, "failed")
-        # self.all_end_times[self.play][str(result._host)] = self.time_in_milliseconds()
 
     def v2_runner_on_failed(self, result, ignore_errors=False):
         self._create_data_point(result._host, "failed")
-        # self.all_end_times[self.play][str(result._host)] = self.time_in_milliseconds()
 
     def v2_runner_on_skipped(self, result):
         self._create_data_point(result._host, "ok")
-        # self.all_end_times[self.play][str(result._host)] = self.time_in_milliseconds()
 
     def v2_runner_on_unreachable(self, result):
         self._create_data_point(result._host, "unreachable")
-        # self.all_end_times[self.play][str(result._host)] = self.time_in_milliseconds()
-
-    # def v2_runner_on_async_poll(self, result):
-    #     self.all_end_times[self.play][str(result._host)] = self.time_in_milliseconds()
 
     def v2_runner_on_async_ok(self, result):
         self._create_data_point(result._host, "ok")
-        # self.all_end_times[self.play][str(result._host)] = self.time_in_milliseconds()
