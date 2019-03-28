@@ -11,7 +11,13 @@ DOCUMENTATION = '''
     requirements:
       - "python >= 2.6"
       - "influxdb >= 0.9"
-    short_description: create influxdb datapoint per play and host
+    short_description: create influxdb datapoint per taks, role, play and host
+    description:
+      - This callback module will track and save the duration of ansible tasks per hosts, role and play. It will write
+        the data into an influxdb database which makes it possible to create dashboards to pinpoint exactly which
+        task/role/play is taking the longest.
+      - To make the most out of the data we recommend to name all tasks and plays. The names will be provided as tags
+        in the influxdb
     author:
       - Johannes Brunswicker (@MatrixCrawler)
     version_added: "2.8"
@@ -139,10 +145,8 @@ class CallbackModule(CallbackBase):
                                   "pip install influxdb")
             self.disabled = True
 
-        self.play = ""
-        self.start_time = {}
-        self.all_end_times = {}
         self.influx = {}
+        self.task_start_times = {}
 
     def _connect_to_influxdb(self):
         """
@@ -192,59 +196,58 @@ class CallbackModule(CallbackBase):
 
         self._display.info("Influx Host: %s", self.influx["host"])
 
-    def v2_playbook_on_play_start(self, play):
-        self.play = play.name
-        self.start_time[self.play] = self.time_in_milliseconds()
-        self.all_end_times[self.play] = {}
-
-    def v2_playbook_on_stats(self, stats):
-        influxdb = self._connect_to_influxdb()
-        data_points = []
-        for play, play_results in self.all_end_times.items():
-            for host, host_data_point in play_results.items():
-                duration = host_data_point["end_time"] - self.start_time[play]
-                self._display.display("duration for '" + host + "': " + str(duration))
-                data_point = dict(
-                    measurement=self.influx["measurement"],
-                    tags=dict(
-                        host=host,
-                        play=play
-                    ),
-                    time=str(datetime.utcnow()),
-                    fields=dict(
-                        duration=duration,
-                        state=host_data_point["state"]
-                    )
-                )
-                data_points.append(data_point)
-        influxdb.write_points(data_points)
-        influxdb.close()
-
     @staticmethod
     def time_in_milliseconds():
         return int(round(time.time() * 1000))
 
-    def _create_data_point(self, hostname, state="ok"):
-        data_point = dict(
-            end_time=self.time_in_milliseconds(),
-            state=state
-        )
-        self.all_end_times[self.play][str(hostname)] = data_point
+    def _create_data_point(self, result, state="ok"):
+        if result._task._role is None:
+            play = "None"
+            play_uuid = "None"
+            role_uuid = "None"
+        else:
+            play = str(result._task._role._play)
+            play_uuid = str(result._task._role._play._uuid)
+            role_uuid = str(result._task._role._uuid)
 
-    def v2_runner_on_ok(self, result):
-        self._create_data_point(result._host, "ok")
+        data_point = dict(
+            measurement=self.influx["measurement"],
+            tags=dict(
+                host=result._host,
+                play=play,
+                play_uuid=play_uuid,
+                role=str(result._task._role),
+                role_uuid=role_uuid,
+                task_name=str(result._task.name),
+                task_uuid=str(result._task._uuid),
+            ),
+            time=str(datetime.utcnow()),
+            fields=dict(
+                duration=self.time_in_milliseconds() - self.task_start_times[result._task._uuid],
+                state=state
+            )
+        )
+        influxdb = self._connect_to_influxdb()
+        influxdb.write_points([data_point])
+        influxdb.close()
 
     def v2_runner_on_async_failed(self, result):
-        self._create_data_point(result._host, "failed")
+        self._create_data_point(result, "failed")
 
     def v2_runner_on_failed(self, result, ignore_errors=False):
-        self._create_data_point(result._host, "failed")
+        self._create_data_point(result, "failed")
 
     def v2_runner_on_skipped(self, result):
-        self._create_data_point(result._host, "ok")
+        self._create_data_point(result, "ok")
 
     def v2_runner_on_unreachable(self, result):
-        self._create_data_point(result._host, "unreachable")
+        self._create_data_point(result, "unreachable")
 
     def v2_runner_on_async_ok(self, result):
-        self._create_data_point(result._host, "ok")
+        self._create_data_point(result, "ok")
+
+    def v2_playbook_on_task_start(self, task, is_conditional):
+        self.task_start_times[task._uuid] = self.time_in_milliseconds()
+
+    def v2_runner_on_ok(self, result):
+        self._create_data_point(result, "ok")
